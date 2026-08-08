@@ -1,0 +1,56 @@
+(ns carwashops.phase-test
+  "The permanent invariants of the rollout phase table.
+
+  These are not 'does the code work' tests -- they are the machine form
+  of the sentences `carwashops.phase`'s docstring asserts. A future
+  edit that adds an actuation to a phase's `:auto` set must fail here."
+  (:require [clojure.test :refer [deftest is testing]]
+            [carwashops.phase :as phase]))
+
+(deftest actuations-are-never-auto-eligible-at-any-phase
+  (let [auto (phase/auto-eligible-ops)]
+    (doseq [op [:actuation/apply-wash-process :actuation/return-vehicle]]
+      (testing (str op " is absent from every phase's :auto set")
+        (is (not (contains? auto op)))))
+    (testing "screening is likewise never auto-eligible"
+      (is (not (contains? auto :discharge-permit/screen))))
+    (testing "but :auto is not empty -- opening a wash ticket may auto-commit"
+      (is (= #{:ticket/intake} auto)))))
+
+(deftest every-phase-writes-set-is-a-subset-of-write-ops
+  (doseq [[p {:keys [writes auto]}] phase/phases]
+    (testing (str "phase " p)
+      (is (every? phase/write-ops writes))
+      (is (every? writes auto) ":auto must be a subset of :writes"))))
+
+(deftest phase-0-writes-nothing
+  (is (empty? (:writes (get phase/phases 0)))))
+
+(deftest a-governor-hold-survives-every-phase
+  (doseq [p (keys phase/phases)]
+    (testing (str "phase " p " cannot turn a HOLD into anything else")
+      (is (= :hold (:disposition (phase/gate p {:op :ticket/intake} :hold)))))))
+
+(deftest a-disabled-write-holds-with-a-reason
+  (let [{:keys [disposition reason]}
+        (phase/gate 1 {:op :actuation/apply-wash-process} :commit)]
+    (is (= :hold disposition))
+    (is (= :phase-disabled reason))))
+
+(deftest a-clean-actuation-escalates-rather-than-commits
+  (let [{:keys [disposition reason]}
+        (phase/gate 3 {:op :actuation/apply-wash-process} :commit)]
+    (is (= :escalate disposition))
+    (is (= :phase-approval reason))))
+
+(deftest intake-may-auto-commit-at-phase-3-only
+  (is (= :commit (:disposition (phase/gate 3 {:op :ticket/intake} :commit))))
+  (is (= :escalate (:disposition (phase/gate 2 {:op :ticket/intake} :commit)))))
+
+(deftest verdict-mapping-prefers-the-most-cautious-reading
+  (is (= :hold (phase/verdict->disposition {:hard? true :escalate? true})))
+  (is (= :escalate (phase/verdict->disposition {:hard? false :escalate? true})))
+  (is (= :commit (phase/verdict->disposition {:hard? false :escalate? false}))))
+
+(deftest default-phase-is-declared
+  (is (contains? phase/phases phase/default-phase)))

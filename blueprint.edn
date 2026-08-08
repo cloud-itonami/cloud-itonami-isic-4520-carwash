@@ -1,0 +1,14 @@
+{:itonami.blueprint/id "cloud-itonami-isic-4520-carwash"
+ :itonami.blueprint/name "Vehicle washing and polishing"
+ :itonami.blueprint/isic-rev5 "4520"
+ :itonami.blueprint/satellite-of "cloud-itonami-isic-4520"
+ :itonami.blueprint/domain :services/vehicle-washing
+ :itonami.blueprint/license "AGPL-3.0-or-later"
+ :itonami.blueprint/social-impact [:community-access :data-sovereignty :transparency
+                                   :environmental-compliance]
+ :itonami.blueprint/governor :car-wash-governor
+ :itonami.blueprint/required-technologies [:identity :forms :dmn :audit-ledger]
+ :itonami.blueprint/optional-technologies [:robotics]
+ :itonami.blueprint/status :public-oss
+ :itonami.blueprint/robotics false
+ :itonami.blueprint/maturity :implemented}
