@@ -102,9 +102,20 @@ invariant must not depend on the censored party's own report. See
 ## Run it
 
 ```bash
-clojure -M:dev:run     # the demo: 5 commits and 6 distinct governor holds
-clojure -M:dev:test    # 31 tests / 91 assertions
+clojure -M:dev:run          # the demo: 5 commits and 6 distinct governor holds
+clojure -M:dev:test         # 31 tests / 91 assertions
+clojure -M:dev:render-html  # regenerate docs/samples/operator-console.html
 ```
+
+[`docs/samples/operator-console.html`](docs/samples/operator-console.html)
+is not a mockup: `carwashops.render-html` drives this same actor stack
+against the same seeded tickets and renders whatever comes back — 16
+ledger facts (7 commits, 8 governor holds, 1 declined approval),
+**every one of the governor's 9 HARD rules reached**, and
+the gate / phase / scope tables derived at build time from
+`governor/allowed-ops`, `governor/high-stakes`, `phase/phases` and
+`governor/scope-excluded-terms` rather than transcribed. It contains no
+timestamp and no random value, so two runs are byte-identical.
 
 The demo is deterministic and offline. Its ledger ends like this —
 every hold names its own rule:
