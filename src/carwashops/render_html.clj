@@ -1,463 +1,471 @@
 (ns carwashops.render-html
-  "Build-time operator console renderer -- `clojure -M:dev:render-html`.
+  "Build-time HTML renderer for `docs/samples/operator-console.html`.
 
-  This namespace renders NOTHING of its own invention. It drives the
-  REAL actor stack (`carwashops.store/seed-db` ->
-  `carwashops.operation/build` -> `langgraph.graph/run*`) exactly the
-  way `carwashops.sim` does, then reads the resulting SSoT and
-  append-only ledger back out through the `Store` protocol and prints
-  what it found. Every wash ticket on the page is a seeded ticket from
-  `store/demo-data`; every HARD hold on the page was produced by
-  `carwashops.governor/check` recomputing ground truth from the ticket's
-  own recorded fields.
+  Closes flagship checklist item 2 for this repo: it previously had NO
+  demo page and no generator at all. This namespace drives the REAL
+  actor stack (`carwashops.operation` -> `carwashops.advisor` ->
+  `carwashops.governor` -> `carwashops.phase` -> `carwashops.store`)
+  through a scenario adapted from this repo's own `carwashops.sim` demo
+  driver (`clojure -M:dev:run`).
 
-  ## What can appear in the ledger, and what deliberately cannot
+  **Input provenance.** Every subject id below -- `ticket-1` ..
+  `ticket-5` -- is literally present in `carwashops.store/demo-data`,
+  checked against the seed before this file was written. This repo's
+  own `sim.cljc` uses the same five ids, so it was safe to adapt rather
+  than author a fresh scenario. Nothing here invents a ticket, a field
+  or a number: every cell rendered below is either a field that exists
+  on this repo's wash-ticket model, a value recomputed by this repo's
+  own pure `carwashops.registry` functions, or a fact the real governor
+  wrote to the append-only ledger during this run.
 
-  `carwashops.operation` writes the store ledger from exactly two
-  nodes: `:commit` appends `{:t :committed}`, and `:hold` appends the
-  `:governor-hold` / `:approval-rejected` fact. `:advisor-proposed`,
-  `:approval-requested` and `:approval-granted` are emitted to the
-  in-memory `:audit` channel ONLY and never reach the store. So this
-  renderer branches on `:committed`, `:governor-hold` and
-  `:approval-rejected` and on nothing else -- an `:approval-granted`
-  branch here would be a status that can never be shown, which is worse
-  than no branch at all.
+  **The gate / phase / scope tables are derived, not transcribed** --
+  they read `carwashops.governor/allowed-ops`, `governor/high-stakes`,
+  `governor/scope-excluded-terms` and `carwashops.phase/phases`
+  directly, so they cannot drift away from what the actor actually
+  does.
 
-  ## Determinism
+  Deterministic: no timestamps, no random, no wall-clock in the page
+  content; byte-identical across reruns against the same seed (verify
+  by diffing two consecutive runs).
 
-  `advisor/mock-advisor` is deterministic, `registry` is pure, and
-  nothing here reads a clock, a UUID or the filesystem. Two runs of
-  `-main` produce byte-identical HTML. Doubles are formatted with
-  `Locale/ROOT` so the bytes do not depend on the machine's locale."
-  (:require [clojure.string :as str]
+  Usage: `clojure -M:dev:render-html [out-file]`
+  (default `docs/samples/operator-console.html`)."
+  (:require [jp-go-dds.skin]
+            [clojure.string :as str]
             [carwashops.facts :as facts]
             [carwashops.governor :as governor]
             [carwashops.operation :as op]
             [carwashops.phase :as phase]
             [carwashops.registry :as registry]
             [carwashops.store :as store]
-            [langgraph.graph :as g])
-  (:import (java.io File)
-           (java.util Locale)))
-
-;; ----------------------------- driving the real actor -----------------------------
+            [langgraph.graph :as g]))
 
 (def ^:private operator
-  "The human on the other side of `interrupt-before #{:request-approval}`."
-  {:actor-id "op-1" :actor-role :wash-bay-supervisor :phase phase/default-phase})
+  "Same operator envelope `carwashops.sim` uses: phase 3 (supervised
+  auto), which is the most permissive phase this actor has."
+  {:actor-id "op-1" :actor-role :wash-bay-supervisor :phase 3})
 
-(defn- exec!
-  "One operation = one graph run on its own thread-id."
-  [actor tid request]
+(defn- exec! [actor tid request]
   (g/run* actor {:request request :context operator} {:thread-id tid}))
 
-(defn- approve!
-  "Resume an interrupted thread with a human approval."
-  [actor tid]
+(defn- approve! [actor tid]
   (g/run* actor {:approval {:status :approved :by "op-1"}}
           {:thread-id tid :resume? true}))
 
-(defn- exec-approve!
-  "The normal shape for every write op except `:ticket/intake`: the
-  phase gate escalates it (`:phase-approval`), the operator approves,
-  the `:commit` node writes the SSoT."
-  [actor tid request]
-  (exec! actor tid request)
-  (approve! actor tid))
+(defn- reject! [actor tid]
+  (g/run* actor {:approval {:status :rejected :by "op-1"}}
+          {:thread-id tid :resume? true}))
 
 (defn run-demo!
-  "Drive the real OperationActor over the seeded wash tickets.
+  "Runs a fresh seeded store through a scenario that reaches every
+  disposition and EVERY HARD rule this governor has.
 
-  Every subject below is a ticket that already exists in
-  `store/demo-data` -- nothing is invented, and no field is passed that
-  the ticket model does not already carry.
+  Clean lifecycle -- ticket-1 (JPN, standard clear coat, soft cloth,
+  permit current, reclaim claim 0.7 matching its own 700/1000 litres):
+  intake (the only op any phase may auto-commit), effluent-plan
+  verification, discharge-permit screening, wash-process application
+  and vehicle return. The last two ALWAYS escalate to a human -- they
+  are absent from every phase's `:auto` set and are members of
+  `governor/high-stakes`, two independent layers asserting the same
+  invariant -- and are approved here.
 
-  The hold scenarios are ordered so that each HARD rule fires in
-  ISOLATION wherever possible: ticket-3 and ticket-5 get their effluent
-  plan verified and their discharge permit screened FIRST, so that when
-  the wash actuation is finally attempted the only thing left standing
-  between the operator and the wash bay is the one physical/arithmetic
-  fact the governor recomputed for itself."
+  HARD holds, each reached through a seeded ticket that exists to make
+  exactly one rule reachable (see `store/demo-data`'s own docstring):
+
+    ticket-2  `:no-spec-basis`                    jurisdiction \"ATL\" has no
+                                                  effluent standard on file
+    ticket-3  `:wash-process-forbidden-by-finish` matte finish + high-pressure
+                                                  brush, recomputed from the
+                                                  ticket's own two fields
+    ticket-4  `:discharge-permit-not-current`     screening finds the permit
+                                                  lapsed and holds on its own
+                                                  finding
+    ticket-4  `:evidence-incomplete`              a return attempt with no
+                                                  verified effluent plan on
+                                                  file (the held screening
+                                                  above wrote nothing)
+    ticket-5  `:reclaim-claim-mismatch`           claimed 0.8 vs the identity
+                                                  300/1000 = 0.3
+    ticket-1  `:op-not-allowed` + `:scope-excluded`
+                                                  an op outside the closed
+                                                  vocabulary whose own name
+                                                  reaches for a roadworthiness
+                                                  clearance -- both rules fire
+    ticket-1  `:already-washed` / `:already-returned`
+                                                  the two double-actuation
+                                                  guards, off dedicated
+                                                  booleans
+
+  ticket-3 and ticket-5 get their effluent plan verified first, so that
+  their actuation holds isolate the finish rule and the reclaim
+  identity instead of also tripping `:evidence-incomplete`.
+
+  No HARD hold ever reaches a human -- `phase/gate` keeps a governor
+  HOLD a HOLD at every phase.
+
+  One escalation is deliberately REJECTED rather than approved
+  (ticket-3's discharge-permit screening). That exercises the other
+  side of the human-in-the-loop gate and puts the third and last fact
+  type this store actually persists -- `:approval-rejected` -- into the
+  ledger, so the page renders no state it has not observed. It also
+  demonstrates that the approval interrupt is real: the rejected
+  screening writes NOTHING to the SSoT, which is why ticket-3's later
+  wash attempt still has no permit screening on file.
+
+  Note which facts reach the persisted ledger at all: only `:committed`
+  (from the `:commit` node) and `:governor-hold` / `:approval-rejected`
+  (from the `:hold` node). `:advisor-proposed`, `:approval-requested`
+  and `:approval-granted` are emitted into the in-memory run audit and
+  are NEVER appended by `store/append-ledger!` -- so nothing on this
+  page may test the ledger for them. Returns the resulting store."
   []
-  (let [db    (store/seed-db)
+  (let [db (store/seed-db)
         actor (op/build db)]
+    ;; --- ticket-1: the full clean lifecycle ---
+    (exec! actor "t1-intake" {:op :ticket/intake :subject "ticket-1"
+                              :patch {:id "ticket-1" :customer "Sakura Tanaka"}})
 
-    ;; --- ticket-1: the clean path, end to end -------------------------
-    ;; `:ticket/intake` is the ONLY op any phase may auto-commit.
-    (exec! actor "t1" {:op :ticket/intake :subject "ticket-1"
-                       :patch {:id "ticket-1" :customer "Sakura Tanaka"}})
-    (exec-approve! actor "t2" {:op :effluent-plan/verify    :subject "ticket-1"})
-    (exec-approve! actor "t3" {:op :discharge-permit/screen :subject "ticket-1"})
-    ;; Both actuations are absent from every phase's :auto set, forever.
-    (exec-approve! actor "t4" {:op :actuation/apply-wash-process :subject "ticket-1"})
-    (exec-approve! actor "t5" {:op :actuation/return-vehicle     :subject "ticket-1"})
+    (exec! actor "t1-plan" {:op :effluent-plan/verify :subject "ticket-1"})
+    (approve! actor "t1-plan")
 
-    ;; --- ticket-5: evidence-incomplete BEFORE its plan exists ---------
-    ;; A JPN ticket has a spec-basis on file, so the spec-basis gate is
-    ;; satisfied -- what is missing is the verified effluent plan itself.
-    (exec! actor "h-evidence" {:op :actuation/return-vehicle :subject "ticket-5"})
+    (exec! actor "t1-permit" {:op :discharge-permit/screen :subject "ticket-1"})
+    (approve! actor "t1-permit")
 
-    ;; --- ticket-3: everything compliant except the physics ------------
-    (exec-approve! actor "t6" {:op :effluent-plan/verify    :subject "ticket-3"})
-    (exec-approve! actor "t7" {:op :discharge-permit/screen :subject "ticket-3"})
-    (exec! actor "h-finish" {:op :actuation/apply-wash-process :subject "ticket-3"})
+    (exec! actor "t1-wash" {:op :actuation/apply-wash-process :subject "ticket-1"})
+    (approve! actor "t1-wash")
 
-    ;; --- ticket-5: everything compliant except the arithmetic ---------
-    (exec-approve! actor "t8" {:op :effluent-plan/verify    :subject "ticket-5"})
-    (exec-approve! actor "t9" {:op :discharge-permit/screen :subject "ticket-5"})
-    (exec! actor "h-reclaim" {:op :actuation/apply-wash-process :subject "ticket-5"})
+    (exec! actor "t1-return" {:op :actuation/return-vehicle :subject "ticket-1"})
+    (approve! actor "t1-return")
 
-    ;; --- ticket-2: a jurisdiction with no effluent standard on file ---
-    (exec! actor "h-basis" {:op :effluent-plan/verify :subject "ticket-2"})
+    ;; --- HARD: no spec-basis for jurisdiction "ATL" ---
+    (exec! actor "t2-plan" {:op :effluent-plan/verify :subject "ticket-2"})
 
-    ;; --- ticket-4: a lapsed discharge permit, found by the screen -----
-    (exec! actor "h-permit" {:op :discharge-permit/screen :subject "ticket-4"})
+    ;; --- HARD: wash process forbidden by the vehicle's own finish ---
+    (exec! actor "t3-plan" {:op :effluent-plan/verify :subject "ticket-3"})
+    (approve! actor "t3-plan")
+    ;; The human says NO. Governor-clean, so it escalated; the approver
+    ;; declined, so it lands as :approval-rejected and commits nothing.
+    (exec! actor "t3-permit" {:op :discharge-permit/screen :subject "ticket-3"})
+    (reject! actor "t3-permit")
+    (exec! actor "t3-wash" {:op :actuation/apply-wash-process :subject "ticket-3"})
 
-    ;; --- an op outside the closed vocabulary --------------------------
-    (exec! actor "h-vocab" {:op :actuation/clear-roadworthiness :subject "ticket-1"})
+    ;; --- HARD: lapsed discharge permit, then evidence incomplete ---
+    (exec! actor "t4-permit" {:op :discharge-permit/screen :subject "ticket-4"})
+    (exec! actor "t4-return" {:op :actuation/return-vehicle :subject "ticket-4"})
 
-    ;; --- the two double-actuation guards ------------------------------
-    (exec! actor "h-washed"   {:op :actuation/apply-wash-process :subject "ticket-1"})
-    (exec! actor "h-returned" {:op :actuation/return-vehicle     :subject "ticket-1"})
+    ;; --- HARD: claimed reclaim rate vs the ticket's own litre counts ---
+    (exec! actor "t5-plan" {:op :effluent-plan/verify :subject "ticket-5"})
+    (approve! actor "t5-plan")
+    (exec! actor "t5-wash" {:op :actuation/apply-wash-process :subject "ticket-5"})
 
+    ;; --- HARD: op outside the closed vocabulary, reaching for an
+    ;;     excluded decision (both rules fire on the one proposal) ---
+    (exec! actor "x-scope" {:op :actuation/clear-roadworthiness :subject "ticket-1"})
+
+    ;; --- HARD: the two double-actuation guards ---
+    (exec! actor "x-rewash" {:op :actuation/apply-wash-process :subject "ticket-1"})
+    (exec! actor "x-rereturn" {:op :actuation/return-vehicle :subject "ticket-1"})
     db))
 
-;; ----------------------------- html helpers -----------------------------
+;; ----------------------------- rendering -----------------------------
 
 (defn- esc [v]
   (-> (str v)
       (str/replace "&" "&amp;")
       (str/replace "<" "&lt;")
-      (str/replace ">" "&gt;")
-      (str/replace "\"" "&quot;")))
+      (str/replace ">" "&gt;")))
 
-(defn- sfmt
-  "`format` pinned to `Locale/ROOT` so the rendered bytes do not depend
-  on the machine's default locale."
-  [f & args]
-  (String/format Locale/ROOT f (object-array args)))
+(defn- kw-str [k]
+  (cond (keyword? k) (if-let [n (namespace k)] (str n "/" (name k)) (name k))
+        :else (str k)))
 
-(defn- code [v] (str "<code>" (esc v) "</code>"))
+(defn- fmt-rate
+  "Round to 3 decimals with integer arithmetic -- `format`'s decimal
+  separator is locale-dependent and this page must be byte-identical
+  on any machine."
+  [x]
+  (if (nil? x) "&mdash;" (str (/ (Math/round (* (double x) 1000.0)) 1000.0))))
 
-(defn- kws [coll]
-  (if (seq coll) (str/join ", " (map str coll)) "-"))
-
-(defn- rate [x] (if (number? x) (sfmt "%.3f" (double x)) "-"))
-
-(defn- yn [b] (if b "yes" "no"))
-
-;; ----------------------------- ledger views -----------------------------
-
-(defn- holds
-  "Every HARD hold the governor actually wrote to the ledger."
-  [ledger]
-  (filterv #(= :governor-hold (:t %)) ledger))
-
-(defn- rules-fired
-  "The governor rule names that fired in THIS run, read back off the
-  ledger -- not a list this namespace keeps."
-  [ledger]
-  (into (sorted-set) (mapcat :basis (holds ledger))))
-
-(defn- last-fact-for [ledger subject]
-  (last (filter #(= subject (:subject %)) ledger)))
+(defn- last-fact-for [ledger ticket-id]
+  (last (filter #(= (:subject %) ticket-id) ledger)))
 
 (defn- status-cell
-  "Only the three fact types `carwashops.operation` actually appends to
-  the store ledger are branched on here."
-  [ledger subject]
-  (let [f (last-fact-for ledger subject)]
+  "The ticket's last PERSISTED fact. `carwashops.operation` appends to
+  `store/append-ledger!` from exactly two nodes -- `:commit` (writing
+  `:committed`) and `:hold` (writing whichever of `:governor-hold` /
+  `:approval-rejected` the run produced) -- so those three are the only
+  `:t` values that can ever appear here. `:advisor-proposed`,
+  `:approval-requested` and `:approval-granted` go to the in-memory run
+  audit only and are NEVER appended, so this function must not test for
+  them; a branch on `:approval-granted` would be dead code that reads
+  like a feature."
+  [ledger ticket-id]
+  (let [f (last-fact-for ledger ticket-id)]
     (cond
-      (nil? f) "<span class=\"muted\">no ledger activity</span>"
-      (= :committed (:t f))
-      (str "<span class=\"ok\">committed</span> <span class=\"muted\">"
-           (esc (:op f)) "</span>")
+      (nil? f) "<span class=\"muted\">no activity</span>"
+      (= :committed (:t f)) "<span class=\"ok\">committed</span>"
       (= :governor-hold (:t f))
-      (str "<span class=\"critical\">HARD hold</span> <span class=\"muted\">"
-           (esc (kws (:basis f))) "</span>")
+      (str "<span class=\"critical\">HARD hold &middot; "
+           (esc (str/join ", " (map kw-str (:basis f)))) "</span>")
       (= :approval-rejected (:t f))
-      "<span class=\"critical\">approver rejected</span>"
-      :else "<span class=\"muted\">unknown</span>")))
+      "<span class=\"warn\">approver declined &middot; nothing committed</span>"
+      :else "<span class=\"muted\">in progress</span>")))
 
-;; ----------------------------- sections -----------------------------
+(defn- actuation-cell
+  "Both actuation lifecycles off their OWN dedicated boolean (never a
+  `:status` value), plus the registry number the commit produced."
+  [{:keys [wash-applied? vehicle-returned? wash-number return-number]}]
+  (str
+   (if wash-applied?
+     (str "<span class=\"ok\">washed &middot; <code>" (esc wash-number) "</code></span>")
+     "<span class=\"muted\">not washed</span>")
+   "<br>"
+   (if vehicle-returned?
+     (str "<span class=\"ok\">returned &middot; <code>" (esc return-number) "</code></span>")
+     "<span class=\"muted\">not returned</span>")))
 
-(defn- ticket-rows [db ledger]
-  (->> (store/all-tickets db)
-       (map (fn [{:keys [id customer vehicle jurisdiction finish
-                         proposed-wash-process water-drawn-litres
-                         water-reclaimed-litres claimed-reclaim-rate
-                         discharge-permit-not-current?
-                         wash-applied? vehicle-returned?] :as t}]
-              (sfmt (str "        <tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
-                         "<td>%s</td><td>%s</td><td class=\"num\">%s / %s</td>"
-                         "<td class=\"num\">%s</td><td class=\"num\">%s</td>"
-                         "<td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>")
-                    (code id) (esc customer) (esc vehicle) (esc jurisdiction)
-                    (code finish) (code proposed-wash-process)
-                    (esc water-reclaimed-litres) (esc water-drawn-litres)
-                    (esc (rate claimed-reclaim-rate))
-                    (esc (rate (registry/reclaim-rate t)))
-                    (if discharge-permit-not-current?
-                      "<span class=\"critical\">lapsed</span>"
-                      "<span class=\"ok\">current</span>")
-                    (esc (yn wash-applied?)) (esc (yn vehicle-returned?))
-                    (status-cell ledger id))))
-       (str/join "\n")))
+(defn- reclaim-cell
+  "Claimed vs the rate `carwashops.registry/reclaim-rate` recomputes
+  from this ticket's own litre counts -- an identity, not an estimate."
+  [{:keys [claimed-reclaim-rate water-drawn-litres water-reclaimed-litres] :as t}]
+  (let [actual (registry/reclaim-rate t)
+        bad? (registry/reclaim-claim-mismatch? t)]
+    (str "claimed " (fmt-rate claimed-reclaim-rate)
+         " / recomputed " (fmt-rate actual)
+         " <span class=\"muted\">(" (esc water-reclaimed-litres) "&nbsp;/&nbsp;"
+         (esc water-drawn-litres) "&nbsp;L)</span> "
+         (if bad?
+           "<span class=\"critical\">mismatch</span>"
+           "<span class=\"ok\">identity holds</span>"))))
+
+(defn- permit-cell [{:keys [discharge-permit-not-current?]}]
+  (if discharge-permit-not-current?
+    "<span class=\"critical\">lapsed</span>"
+    "<span class=\"ok\">current</span>"))
+
+(defn- ticket-row
+  [ledger {:keys [id customer vehicle finish proposed-wash-process jurisdiction] :as t}]
+  (format "        <tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s &rarr; <code>%s</code></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+          (esc id) (esc customer) (esc vehicle)
+          (esc (kw-str finish)) (esc (kw-str proposed-wash-process))
+          (esc jurisdiction)
+          (reclaim-cell t)
+          (permit-cell t)
+          (actuation-cell t)
+          (status-cell ledger id)))
+
+(defn- ledger-row
+  "One row per persisted fact. The three `:t` values this store can hold
+  are styled apart rather than as ok/not-ok, because a declined
+  approval is neither a success nor a governor hold: the governor was
+  CLEAN and a human said no."
+  [{:keys [t op subject basis]}]
+  (format "        <tr><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>"
+          (case t
+            :governor-hold     "<span class=\"critical\">governor-hold</span>"
+            :approval-rejected "<span class=\"warn\">approval-rejected</span>"
+            (str "<span class=\"ok\">" (esc (kw-str t)) "</span>"))
+          (esc (kw-str (or op :n-a))) (esc subject)
+          (esc (str/join ", " (map kw-str basis)))))
 
 (defn- hold-rows
-  "One row per violation of every HARD hold in the ledger. `:detail` is
-  the governor's own sentence, carried on the fact -- not a string this
-  renderer composes."
+  "One row per violation the REAL governor raised in this run, carrying
+  the governor's own `:detail` string. Nothing here is written by hand
+  -- if a rule stops firing, its row disappears.
+
+  Restricted to `:governor-hold` facts on purpose. An
+  `:approval-rejected` fact also carries a `:violations` vector (the
+  `:request-approval` node synthesises `[{:rule :approver-rejected}]`
+  so the hold node has something to write), but `:approver-rejected` is
+  a HUMAN's decision on a governor-clean proposal, not one of the
+  governor's HARD rules -- listing it here would both overstate the
+  governor and disagree with this section's own count."
   [ledger]
-  (->> (holds ledger)
-       (mapcat (fn [{:keys [op subject violations confidence]}]
-                 (map (fn [{:keys [rule detail]}]
-                        (sfmt (str "        <tr><td>%s</td><td>%s</td><td>%s</td>"
-                                   "<td>%s</td><td class=\"num\">%s</td></tr>")
-                              (code subject) (code op)
-                              (str "<span class=\"critical\">" (esc rule) "</span>")
-                              (esc detail) (esc (rate confidence))))
-                      violations)))
-       (str/join "\n")))
+  (for [{:keys [t op subject violations]} ledger
+        :when (and (= :governor-hold t) (seq violations))
+        {:keys [rule detail]} violations]
+    (format "        <tr><td><code>%s</code></td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>"
+            (esc (kw-str rule)) (esc (kw-str op)) (esc subject) (esc detail))))
 
 (defn- gate-rows
-  "Derived from `carwashops.phase/phases` and
-  `carwashops.governor/high-stakes` -- if either changes, this table
-  changes with it."
+  "DERIVED description of the actor's fixed op contract -- read live
+  from `governor/allowed-ops`, `governor/high-stakes` and
+  `phase/phases` / `phase/auto-eligible-ops`. This is a statement of
+  permanent contract, NOT runtime telemetry: it says what the actor
+  would do for any request, not what happened in the run above. It is
+  derived rather than transcribed precisely so it cannot drift away
+  from the vars it describes."
   []
-  (let [{:keys [writes auto]} (get phase/phases phase/default-phase)]
-    (->> (sort-by str governor/allowed-ops)
-         (map (fn [o]
-                (sfmt "        <tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
-                      (code o)
-                      (esc (yn (contains? writes o)))
-                      (if (contains? auto o)
-                        "<span class=\"ok\">may auto-commit when governor-clean</span>"
-                        "<span class=\"warn\">ALWAYS human approval</span>")
-                      (if (contains? governor/high-stakes o)
-                        "<span class=\"critical\">high-stakes actuation</span>"
-                        "<span class=\"muted\">-</span>"))))
-         (str/join "\n"))))
+  (let [auto (phase/auto-eligible-ops)
+        phase3-writes (:writes (get phase/phases 3))]
+    (for [o (sort-by kw-str governor/allowed-ops)]
+      (format "        <tr><td><code>%s</code></td><td>%s</td></tr>"
+              (esc (kw-str o))
+              (cond
+                (contains? governor/high-stakes o)
+                "<span class=\"warn\">ALWAYS human approval &middot; never auto-eligible at any phase &middot; asserted twice (governor <code>high-stakes</code> + absent from every phase <code>:auto</code>)</span>"
 
-(defn- phase-rows []
-  (->> (sort (keys phase/phases))
-       (map (fn [p]
-              (let [{:keys [label writes auto]} (get phase/phases p)]
-                (sfmt "        <tr><td class=\"num\">%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
-                      (esc p) (esc label) (esc (kws (sort-by str writes)))
-                      (esc (kws (sort-by str auto)))))))
-       (str/join "\n")))
+                (contains? auto o)
+                "<span class=\"ok\">phase-3 auto-commit when the governor is clean</span>"
 
-(defn- jurisdiction-rows [db]
-  (let [seen (frequencies (map :jurisdiction (store/all-tickets db)))]
-    (->> (concat (sort (keys facts/spec-basis-table))
-                 (sort (remove facts/covered? (keys seen))))
-         distinct
-         (map (fn [iso3]
-                (let [sb (facts/spec-basis iso3)]
-                  (sfmt "        <tr><td>%s</td><td>%s</td><td>%s</td><td class=\"num\">%s</td><td class=\"num\">%s</td></tr>"
-                        (code iso3)
-                        (if sb (esc (:name sb))
-                            "<span class=\"critical\">NO spec-basis on file</span>")
-                        (if sb (esc (:legal-basis sb)) "-")
-                        (esc (count (facts/required-evidence iso3)))
-                        (esc (get seen iso3 0))))))
-         (str/join "\n"))))
+                (contains? phase3-writes o)
+                "<span class=\"warn\">phase-3 write &middot; human approval (never auto-eligible)</span>"
 
-(defn- finish-rows []
-  (->> (sort-by str (keys registry/finish-forbidden-processes))
-       (map (fn [f]
-              (let [bad (get registry/finish-forbidden-processes f)]
-                (sfmt "        <tr><td>%s</td><td>%s</td></tr>"
-                      (code f)
-                      (if (seq bad)
-                        (str "<span class=\"critical\">" (esc (kws (sort-by str bad))) "</span>")
-                        "<span class=\"muted\">none</span>")))))
-       (str/join "\n")))
+                :else
+                "<span class=\"muted\">not writable at phase 3</span>")))))
 
-(defn- register-rows [records number-key]
-  (if (seq records)
-    (->> records
-         (map (fn [r]
-                (sfmt "        <tr><td>%s</td><td>%s</td><td>%s</td></tr>"
-                      (code (get r number-key))
-                      (code (get r "ticket_id"))
-                      (esc (get r "jurisdiction")))))
-         (str/join "\n"))
-    "        <tr><td colspan=\"3\" class=\"muted\">no records</td></tr>"))
+(defn- phase-rows
+  "DERIVED from `phase/phases` -- the rollout ladder as the actor
+  actually holds it. Fixed contract, not telemetry."
+  []
+  (for [[n {:keys [label writes auto]}] (sort-by key phase/phases)]
+    (format "        <tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            (esc n) (esc label)
+            (if (seq writes)
+              (str/join ", " (map #(str "<code>" (esc (kw-str %)) "</code>")
+                                  (sort-by kw-str writes)))
+              "<span class=\"muted\">none</span>")
+            (if (seq auto)
+              (str/join ", " (map #(str "<code>" (esc (kw-str %)) "</code>")
+                                  (sort-by kw-str auto)))
+              "<span class=\"muted\">none</span>"))))
 
-(defn- ledger-rows [ledger]
-  (->> ledger
-       (map-indexed
-        (fn [i {:keys [t op subject disposition basis actor summary]}]
-          (sfmt (str "        <tr><td class=\"num\">%s</td><td>%s</td><td>%s</td><td>%s</td>"
-                     "<td>%s</td><td>%s</td><td>%s</td></tr>")
-                (esc (inc i))
-                (if (= :committed t)
-                  (str "<span class=\"ok\">" (esc t) "</span>")
-                  (str "<span class=\"critical\">" (esc t) "</span>"))
-                (code op) (code subject) (esc actor)
-                (esc (kws basis))
-                (esc (or summary (str disposition))))))
-       (str/join "\n")))
+(defn- jurisdiction-rows
+  "DERIVED from `carwashops.facts/spec-basis-table`. A jurisdiction
+  absent from this table has NO basis on file, which is why ticket-2's
+  \"ATL\" is a HARD hold above rather than a warning."
+  []
+  (for [[iso3 {:keys [name legal-basis provenance required-evidence]}]
+        (sort-by key facts/spec-basis-table)]
+    (format "        <tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            (esc iso3) (esc name) (esc legal-basis) (esc provenance)
+            (esc (count required-evidence)))))
 
-;; ----------------------------- page -----------------------------
+(defn- registry-rows
+  "The actual records `carwashops.registry` drafted and the store
+  committed during this run -- one per actuation."
+  [db]
+  (concat
+   (for [r (store/wash-history db)]
+     (format "        <tr><td>wash</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>"
+             (esc (get r "wash_number")) (esc (get r "ticket_id"))
+             (esc (get r "jurisdiction"))))
+   (for [r (store/return-history db)]
+     (format "        <tr><td>return</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>"
+             (esc (get r "return_number")) (esc (get r "ticket_id"))
+             (esc (get r "jurisdiction"))))))
 
-(def ^:private css
-  (str "body{font:14px/1.6 -apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;"
-       "margin:0;color:#1a1a1a;background:#f4f5f7}"
-       ".bar{background:#123040;color:#fff;padding:1.3rem 2rem}"
-       ".bar h1{margin:0;font-size:1.15rem}.bar p{margin:.35rem 0 0;font-size:.8rem;opacity:.8}"
-       "main{max-width:1180px;margin:1.5rem auto;padding:0 1rem}"
-       ".card{background:#fff;border-radius:8px;padding:1.1rem 1.3rem;margin-bottom:1.1rem;"
-       "box-shadow:0 1px 3px rgba(0,0,0,.08)}"
-       ".card h2{margin:0 0 .2rem;font-size:1rem}"
-       ".muted{color:#6b7280;font-size:.82rem}"
-       "table{border-collapse:collapse;width:100%;font-size:.83rem;margin-top:.6rem}"
-       "th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid #eef0f2;vertical-align:top}"
-       "th{font-weight:600;color:#555;white-space:nowrap}"
-       "td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}"
-       ".ok{color:#0a7d33}.warn{color:#9a6700}.critical{color:#b41010;font-weight:600}"
-       "code{background:#f0f1f3;padding:.08rem .3rem;border-radius:3px;font-size:.79rem}"
-       "ul{margin:.4rem 0 0;padding-left:1.1rem;font-size:.83rem}"))
+(defn- scope-terms-html
+  "DERIVED from `governor/scope-excluded-terms` -- the prose the
+  governor scans every proposal for, whatever op it claims to be.
+  Fixed contract, not telemetry."
+  []
+  (str/join ", " (map #(str "<code>" (esc %) "</code>") governor/scope-excluded-terms)))
 
 (defn render
-  "Render the operator console from a driven store. Reads only through
-  the `Store` protocol and the pure `facts`/`registry`/`phase`/`governor`
-  tables."
+  "Renders the operator-console document from a store `db` that has
+  already run `run-demo!` (or any other real scenario)."
   [db]
-  (let [ledger  (vec (store/ledger db))
-        fired   (rules-fired ledger)
-        n-hold  (count (holds ledger))
-        n-commit (count (filter #(= :committed (:t %)) ledger))
-        scope?  (contains? fired :scope-excluded)]
+  (let [ledger (vec (store/ledger db))
+        tickets (store/all-tickets db)
+        holds (filter #(= :governor-hold (:t %)) ledger)]
     (str
-     "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
-     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-     "<title>cloud-itonami-isic-4520-carwash &mdash; operator console</title>"
-     "<style>" css "</style></head><body>\n"
-     "<header class=\"bar\"><h1>Vehicle wash operations (ISIC 4520) &mdash; <code>carwashops</code></h1>"
-     "<p>Generated by <code>carwashops.render-html</code> from a real "
-     "<code>carwashops.operation</code> actor run over <code>carwashops.store/seed-db</code>. "
-     "No hand-written state.</p></header>\n<main>\n"
+     "<html><head><meta charset=\"utf-8\"><title>cloud-itonami-isic-4520-carwash &middot; vehicle washing</title><style>"
+     (jp-go-dds.skin/dds+skin)
+     "</style></head><body>\n"
+     "<header class=\"bar\">\n"
+     "  <h1>Vehicle washing and polishing (ISIC 4520) — Operator Console</h1>\n"
+     "  <span class=\"badge\">read-only sample · governor-gated · wash application and vehicle return always human-approved</span>\n"
+     "</header>\n"
+     "<main>\n"
 
-     ;; --- summary ---
-     "<section class=\"card\"><h2>This run</h2>"
-     "<p class=\"muted\">" (esc n-commit) " committed facts, " (esc n-hold)
-     " HARD holds, " (esc (count fired)) " distinct governor rules exercised: "
-     (esc (kws fired)) ".</p>"
-     "<p class=\"muted\">The store ledger is append-only and holds exactly the facts "
-     "<code>carwashops.operation</code> writes from its <code>:commit</code> and "
-     "<code>:hold</code> nodes. <code>:advisor-proposed</code>, "
-     "<code>:approval-requested</code> and <code>:approval-granted</code> live on the "
-     "in-memory <code>:audit</code> channel only and are deliberately not shown as a "
-     "ledger status here.</p>"
-     "<p class=\"muted\">" (esc (facts/coverage-summary)) "</p>"
-     (if scope?
-       "<p class=\"muted\">The <code>:scope-excluded</code> gate fired in this run.</p>"
-       (str "<p class=\"muted\">The <code>:scope-excluded</code> gate did NOT fire: no "
-            "proposal drafted by the shipped deterministic advisor contains any of the "
-            (esc (count governor/scope-excluded-terms))
-            " permanently-out-of-scope terms it scans for (roadworthiness clearance, "
-            "damage liability, self-issued discharge permit). It is listed here as an "
-            "unexercised rule rather than staged with invented prose.</p>"))
-     "</section>\n"
+     "  <section class=\"card\">\n"
+     "    <h2>Wash tickets</h2>\n"
+     "    <p class=\"muted\">Demo snapshot — build-time-generated from <code>carwashops.store/demo-data</code> by driving the real actor (<code>carwashops.operation</code> → <code>carwashops.governor</code> → <code>carwashops.phase</code>) via <code>clojure -M:dev:render-html</code>. Every ticket id below exists in the seed; the reclaim column is recomputed by <code>carwashops.registry/reclaim-rate</code> from each ticket's own litre counts, never copied from the proposal.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Ticket</th><th>Customer</th><th>Vehicle</th><th>Finish → proposed process</th><th>Jurisdiction</th><th>Water reclaim</th><th>Discharge permit</th><th>Actuations</th><th>Last op status</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map (partial ticket-row ledger) tickets)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
 
-     ;; --- hard holds ---
-     "<section class=\"card\"><h2>HARD holds &mdash; recomputed by the governor</h2>"
-     "<p class=\"muted\">Each row is a violation map the governor itself put on the "
-     "ledger fact. The rule and its detail sentence come from "
-     "<code>carwashops.governor</code>, recomputed from fields already recorded on the "
-     "ticket &mdash; never from the advisor's own report.</p>"
-     "<table><thead><tr><th>Ticket</th><th>Op</th><th>Rule</th><th>Governor detail</th>"
-     "<th class=\"num\">Advisor confidence</th></tr></thead><tbody>\n"
-     (hold-rows ledger)
-     "\n      </tbody></table></section>\n"
+     "  <section class=\"card\">\n"
+     "    <h2>HARD holds reached in this run (" (count holds) " proposals)</h2>\n"
+     "    <p class=\"muted\">Every row is a violation the real <code>carwashops.governor</code> raised during the run above, carrying the governor's own <code>:detail</code>. A HARD hold is never escalated to a human — <code>carwashops.phase/gate</code> keeps a governor HOLD a HOLD at every phase, so there is no approval that can override one.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Rule</th><th>Op</th><th>Ticket</th><th>Governor detail</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (hold-rows ledger)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
 
-     ;; --- tickets ---
-     "<section class=\"card\"><h2>Wash tickets</h2>"
-     "<p class=\"muted\">Every ticket below is seeded in "
-     "<code>carwashops.store/demo-data</code>. &quot;Reclaim (recomputed)&quot; is "
-     "<code>carwashops.registry/reclaim-rate</code> applied to the ticket's own litre "
-     "counts &mdash; the identity the governor compares the claim against.</p>"
-     "<table><thead><tr><th>Ticket</th><th>Customer</th><th>Vehicle</th><th>Juris.</th>"
-     "<th>Finish</th><th>Proposed process</th><th class=\"num\">Reclaimed / drawn L</th>"
-     "<th class=\"num\">Reclaim (claimed)</th><th class=\"num\">Reclaim (recomputed)</th>"
-     "<th>Discharge permit</th><th>Washed</th><th>Returned</th><th>Last ledger fact</th>"
-     "</tr></thead><tbody>\n"
-     (ticket-rows db ledger)
-     "\n      </tbody></table></section>\n"
+     "  <section class=\"card\">\n"
+     "    <h2>Action gate (Car Wash Governor)</h2>\n"
+     "    <p class=\"muted\">Fixed contract, derived at build time from <code>governor/allowed-ops</code>, <code>governor/high-stakes</code> and <code>phase/phases</code> — not a record of this run. <code>allowed-ops</code> is the whole vocabulary: no op finalizes a roadworthiness clearance, a damage-liability decision or a discharge permit — those are absent, not merely gated.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Op</th><th>Gate</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (gate-rows)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "    <p class=\"muted\">Permanently out-of-scope prose, scanned on every proposal whatever op it claims to be: " (scope-terms-html) ".</p>\n"
+     "  </section>\n"
 
-     ;; --- action gate ---
-     "<section class=\"card\"><h2>Action gate at phase " (esc phase/default-phase) " ("
-     (esc (:label (get phase/phases phase/default-phase))) ")</h2>"
-     "<p class=\"muted\">Derived from <code>carwashops.phase/phases</code> and "
-     "<code>carwashops.governor/high-stakes</code>. The two "
-     "<code>:actuation/*</code> ops are absent from every phase's auto set at every "
-     "phase &mdash; a permanent structural fact, not a rollout milestone. Governor "
-     "confidence floor: " (esc (rate governor/confidence-floor)) ".</p>"
-     "<table><thead><tr><th>Op</th><th>Write enabled</th><th>Auto-commit</th>"
-     "<th>Stakes</th></tr></thead><tbody>\n"
-     (gate-rows)
-     "\n      </tbody></table>"
-     "<table><thead><tr><th class=\"num\">Phase</th><th>Label</th><th>Writes</th>"
-     "<th>Auto-commit</th></tr></thead><tbody>\n"
-     (phase-rows)
-     "\n      </tbody></table></section>\n"
+     "  <section class=\"card\">\n"
+     "    <h2>Rollout phases</h2>\n"
+     "    <p class=\"muted\">Fixed contract, derived from <code>carwashops.phase/phases</code>. Note that <code>:actuation/apply-wash-process</code> and <code>:actuation/return-vehicle</code> appear in no phase's auto column — a permanent structural fact, not a rollout milestone still to come. This console ran at phase " (esc (:phase operator)) ".</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Phase</th><th>Label</th><th>May write</th><th>May auto-commit when governor-clean</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (phase-rows)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
 
-     ;; --- finish / process table ---
-     "<section class=\"card\"><h2>Physically forbidden wash processes</h2>"
-     "<p class=\"muted\"><code>carwashops.registry/finish-forbidden-processes</code> is "
-     "set membership, not a threshold &mdash; there is no knob to lower.</p>"
-     "<table><thead><tr><th>Finish</th><th>Forbidden processes</th></tr></thead><tbody>\n"
-     (finish-rows)
-     "\n      </tbody></table></section>\n"
+     "  <section class=\"card\">\n"
+     "    <h2>Jurisdictional spec-basis coverage</h2>\n"
+     "    <p class=\"muted\">" (esc (facts/coverage-summary)) "</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>ISO3</th><th>Jurisdiction</th><th>Legal basis</th><th>Provenance</th><th>Required evidence items</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (jurisdiction-rows)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
 
-     ;; --- jurisdictions ---
-     "<section class=\"card\"><h2>Jurisdictional spec-basis</h2>"
-     "<p class=\"muted\">A jurisdiction outside "
-     "<code>carwashops.facts/spec-basis-table</code> has NO effluent standard on file; "
-     "the advisor reports that honestly with empty <code>:cites</code> and the governor "
-     "turns it into a HARD hold.</p>"
-     "<table><thead><tr><th>ISO3</th><th>Name</th><th>Legal basis</th>"
-     "<th class=\"num\">Required records</th><th class=\"num\">Tickets in run</th>"
-     "</tr></thead><tbody>\n"
-     (jurisdiction-rows db)
-     "\n      </tbody></table></section>\n"
+     "  <section class=\"card\">\n"
+     "    <h2>Actuation registry (this run)</h2>\n"
+     "    <p class=\"muted\">The records <code>carwashops.registry</code> drafted and the store committed — one per real-world act, each behind its own sequence counter and its own double-actuation guard.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Kind</th><th>Number</th><th>Ticket</th><th>Jurisdiction</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (registry-rows db)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
 
-     ;; --- actuation registers ---
-     "<section class=\"card\"><h2>Actuation registers</h2>"
-     "<p class=\"muted\">Drafted by <code>carwashops.registry</code> and written only by "
-     "the <code>:commit</code> node, each behind its own sequence counter and its own "
-     "double-actuation guard boolean.</p>"
-     "<table><thead><tr><th>Wash number</th><th>Ticket</th><th>Jurisdiction</th>"
-     "</tr></thead><tbody>\n"
-     (register-rows (store/wash-history db) "wash_number")
-     "\n      </tbody></table>"
-     "<table><thead><tr><th>Return number</th><th>Ticket</th><th>Jurisdiction</th>"
-     "</tr></thead><tbody>\n"
-     (register-rows (store/return-history db) "return_number")
-     "\n      </tbody></table></section>\n"
+     "  <section class=\"card\">\n"
+     "    <h2>Audit ledger (this run)</h2>\n"
+     "    <p class=\"muted\">Append-only decision-fact log — every commit and every hold this scenario produced, in order. <code>:basis</code> is the proposal's own citations for a commit and the violated rule names for a hold.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Fact</th><th>Op</th><th>Ticket</th><th>Basis</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map ledger-row ledger)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+     "</main>\n"
+     "</body></html>\n")))
 
-     ;; --- ledger ---
-     "<section class=\"card\"><h2>Append-only audit ledger</h2>"
-     "<p class=\"muted\">" (esc (count ledger)) " facts, in commit order.</p>"
-     "<table><thead><tr><th class=\"num\">#</th><th>Fact</th><th>Op</th><th>Subject</th>"
-     "<th>Actor</th><th>Basis</th><th>Summary / disposition</th></tr></thead><tbody>\n"
-     (ledger-rows ledger)
-     "\n      </tbody></table></section>\n"
-     "</main></body></html>\n")))
-
-(defn -main
-  "Drive the actor and write the console. Optional arg: output path."
-  [& args]
-  (let [out    (or (first args) "docs/samples/operator-console.html")
-        db     (run-demo!)
-        ledger (store/ledger db)
-        f      (File. ^String out)]
-    (when-let [parent (.getParentFile f)] (.mkdirs parent))
-    (spit f (render db))
-    (println "wrote" out
-             (str "(" (count ledger) " ledger facts, "
-                  (count (holds ledger)) " HARD holds, rules: "
-                  (kws (rules-fired ledger)) ")"))))
+(defn -main [& args]
+  (let [out (or (first args) "docs/samples/operator-console.html")
+        db (run-demo!)
+        html (render db)
+        ledger (store/ledger db)]
+    (spit out html)
+    (println "wrote" out "(" (count ledger) "ledger facts,"
+             (count (filter #(= :governor-hold (:t %)) ledger)) "HARD holds,"
+             (count (store/wash-history db)) "wash applications,"
+             (count (store/return-history db)) "vehicle returns )")))
