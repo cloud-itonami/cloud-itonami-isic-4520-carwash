@@ -16,7 +16,7 @@
   `:required-evidence` mirrors the records a discharge inspector
   actually asks for. `required-evidence-satisfied?` is what the
   governor calls -- a missing jurisdiction can never be satisfied."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def spec-basis-table
   "iso3 -> requirement map. Seeded with the jurisdictions this fleet
@@ -52,7 +52,7 @@
   spec-basis. Callers must treat nil as 'cannot proceed', never as
   'no requirements'."
   [iso3]
-  (get spec-basis-table (some-> iso3 str/upper-case)))
+  (get spec-basis-table (some-> iso3 str/upper)))
 
 (defn covered?
   "Is this jurisdiction seeded? Never report a missing jurisdiction as

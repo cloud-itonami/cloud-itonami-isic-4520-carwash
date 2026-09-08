@@ -43,7 +43,7 @@
   report -- if the advisor omits or mislabels `:stake`, an op-name set
   still holds and a `:stake` set does not. (superproject ADR-2800004000
   records the divergence.)"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [carwashops.facts :as facts]
             [carwashops.registry :as registry]
             [carwashops.store :as store]))
@@ -162,8 +162,8 @@
   decision is HARD-held, whatever op it claims to be."
   [proposal]
   (let [text (str (:summary proposal) " " (:rationale proposal))
-        lower (str/lower-case text)]
-    (when-let [hit (first (filter #(str/includes? lower (str/lower-case (str %)))
+        lower (str/lower text)]
+    (when-let [hit (first (filter #(str/includes? lower (str/lower (str %)))
                                   scope-excluded-terms))]
       [{:rule :scope-excluded
         :detail (str "恒久的にスコープ外の判断に触れる文言を含む: " hit)}])))
