@@ -102,9 +102,9 @@ invariant must not depend on the censored party's own report. See
 ## Run it
 
 ```bash
-clojure -M:dev:run          # the demo: 5 commits and 6 distinct governor holds
-clojure -M:dev:test         # 31 tests / 91 assertions
-clojure -M:dev:render-html  # regenerate docs/samples/operator-console.html
+kbb -M:dev:run          # the demo: 5 commits and 6 distinct governor holds
+kbb -M:dev:test         # 31 tests / 91 assertions
+kbb -M:dev:render-html  # regenerate docs/samples/operator-console.html
 ```
 
 [`docs/samples/operator-console.html`](docs/samples/operator-console.html)

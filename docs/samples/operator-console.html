@@ -2468,7 +2468,7 @@ img,svg { max-width: 100%; height: auto; }</style></head><body>
 <main>
   <section class="card">
     <h2>Wash tickets</h2>
-    <p class="muted">Demo snapshot — build-time-generated from <code>carwashops.store/demo-data</code> by driving the real actor (<code>carwashops.operation</code> → <code>carwashops.governor</code> → <code>carwashops.phase</code>) via <code>clojure -M:dev:render-html</code>. Every ticket id below exists in the seed; the reclaim column is recomputed by <code>carwashops.registry/reclaim-rate</code> from each ticket's own litre counts, never copied from the proposal.</p>
+    <p class="muted">Demo snapshot — build-time-generated from <code>carwashops.store/demo-data</code> by driving the real actor (<code>carwashops.operation</code> → <code>carwashops.governor</code> → <code>carwashops.phase</code>) via <code>kbb -M:dev:render-html</code>. Every ticket id below exists in the seed; the reclaim column is recomputed by <code>carwashops.registry/reclaim-rate</code> from each ticket's own litre counts, never copied from the proposal.</p>
     <table>
       <thead><tr><th>Ticket</th><th>Customer</th><th>Vehicle</th><th>Finish → proposed process</th><th>Jurisdiction</th><th>Water reclaim</th><th>Discharge permit</th><th>Actuations</th><th>Last op status</th></tr></thead>
       <tbody>

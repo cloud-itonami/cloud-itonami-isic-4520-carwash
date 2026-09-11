@@ -92,7 +92,7 @@ second name here.
 ### What this buys
 
 - The washing half of ISIC 4520 has an implementation, and the claim is
-  checkable: `clojure -M:dev:run` prints 5 commits and 6 governor holds,
+  checkable: `kbb -M:dev:run` prints 5 commits and 6 governor holds,
   each naming its own rule.
 - Standard-form from the first commit, so connecting it to the 営み OS
   later is a shim plus a declaration — no repo-side rework.
