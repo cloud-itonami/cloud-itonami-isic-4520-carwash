@@ -9,8 +9,8 @@ This repo holds the business blueprint and operator contracts. See
 `kotoba-lang/industry` for the technology-stack resolution.
 
 ```bash
-clojure -M:test
-clojure -M:lint
+kbb -M:test
+kbb -M:lint
 ```
 
 Keep changes small and include tests for any capability-layer change.

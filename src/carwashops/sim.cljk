@@ -1,5 +1,5 @@
 (ns carwashops.sim
-  "Demo driver -- `clojure -M:dev:run`. Walks a clean ticket through
+  "Demo driver -- `kbb -M:dev:run`. Walks a clean ticket through
   intake -> effluent-plan verification -> discharge-permit screening ->
   wash application (escalate/approve/commit) -> vehicle return
   (escalate/approve/commit), then shows every HARD-hold scenario this

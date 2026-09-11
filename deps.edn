@@ -19,9 +19,9 @@
  {:dev {:override-deps
         {io.github.kotoba-lang/langchain
          {:local/root "../../kotoba-lang/langchain"}}}
-  ;; clojure -M:dev:run  -> drive the demo through one OperationActor
+  ;; kbb -M:dev:run  -> drive the demo through one OperationActor
   :run {:main-opts ["-m" "carwashops.sim"]}
-  ;; clojure -M:dev:render-html -> drive the SAME actor stack and render
+  ;; kbb -M:dev:render-html -> drive the SAME actor stack and render
   ;; docs/samples/operator-console.html from the resulting SSoT + ledger.
   ;; Optional arg: output path.
   :render-html {:main-opts ["-m" "carwashops.render-html"]}

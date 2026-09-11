@@ -6,7 +6,7 @@
   actor stack (`carwashops.operation` -> `carwashops.advisor` ->
   `carwashops.governor` -> `carwashops.phase` -> `carwashops.store`)
   through a scenario adapted from this repo's own `carwashops.sim` demo
-  driver (`clojure -M:dev:run`).
+  driver (`kbb -M:dev:run`).
 
   **Input provenance.** Every subject id below -- `ticket-1` ..
   `ticket-5` -- is literally present in `carwashops.store/demo-data`,
@@ -28,7 +28,7 @@
   content; byte-identical across reruns against the same seed (verify
   by diffing two consecutive runs).
 
-  Usage: `clojure -M:dev:render-html [out-file]`
+  Usage: `kbb -M:dev:render-html [out-file]`
   (default `docs/samples/operator-console.html`)."
   (:require [jp-go-dds.skin]
             [kotoba.lang.text :as str]
@@ -381,7 +381,7 @@
 
      "  <section class=\"card\">\n"
      "    <h2>Wash tickets</h2>\n"
-     "    <p class=\"muted\">Demo snapshot — build-time-generated from <code>carwashops.store/demo-data</code> by driving the real actor (<code>carwashops.operation</code> → <code>carwashops.governor</code> → <code>carwashops.phase</code>) via <code>clojure -M:dev:render-html</code>. Every ticket id below exists in the seed; the reclaim column is recomputed by <code>carwashops.registry/reclaim-rate</code> from each ticket's own litre counts, never copied from the proposal.</p>\n"
+     "    <p class=\"muted\">Demo snapshot — build-time-generated from <code>carwashops.store/demo-data</code> by driving the real actor (<code>carwashops.operation</code> → <code>carwashops.governor</code> → <code>carwashops.phase</code>) via <code>kbb -M:dev:render-html</code>. Every ticket id below exists in the seed; the reclaim column is recomputed by <code>carwashops.registry/reclaim-rate</code> from each ticket's own litre counts, never copied from the proposal.</p>\n"
      "    <table>\n"
      "      <thead><tr><th>Ticket</th><th>Customer</th><th>Vehicle</th><th>Finish → proposed process</th><th>Jurisdiction</th><th>Water reclaim</th><th>Discharge permit</th><th>Actuations</th><th>Last op status</th></tr></thead>\n"
      "      <tbody>\n"
