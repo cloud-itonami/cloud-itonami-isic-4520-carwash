@@ -1,7 +1,7 @@
 (ns carwashops.governor-contract-test
   "Every HARD check must actually fire, and each must fire for its own
   reason. A gate that cannot be shown to refuse is theatre."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [carwashops.governor :as governor]
             [carwashops.registry :as registry]
             [carwashops.facts :as facts]

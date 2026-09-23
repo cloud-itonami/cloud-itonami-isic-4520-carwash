@@ -4,7 +4,7 @@
   These are not 'does the code work' tests -- they are the machine form
   of the sentences `carwashops.phase`'s docstring asserts. A future
   edit that adds an actuation to a phase's `:auto` set must fail here."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [carwashops.phase :as phase]))
 
 (deftest actuations-are-never-auto-eligible-at-any-phase
