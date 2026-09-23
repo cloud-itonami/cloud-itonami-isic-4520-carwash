@@ -5,7 +5,7 @@
   as a separate namespace is that adding a `DatomicStore` later is a
   drop-in: run these same assertions against it and the actor, the
   governor and the ledger never learn which backend they are on."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [carwashops.facts :as facts]
             [carwashops.store :as store]))
 
