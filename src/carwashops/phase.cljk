@@ -27,7 +27,7 @@
   `:discharge-permit/screen` is likewise never auto-eligible, matching
   the posture every sibling's screening op has (9601 solvent handling,
   9522 refrigerant handling, 9523 brand authenticity)."
-  (:require [clojure.set :as set]))
+  (:require [kotoba.lang.coll :as set]))
 
 (def read-ops #{})
 
